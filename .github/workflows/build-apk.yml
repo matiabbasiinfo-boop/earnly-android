@@ -1,4 +1,4 @@
-name: Build Earnly APK
+name: Build Earnly Release APK
 
 on:
   workflow_dispatch:
@@ -33,21 +33,56 @@ jobs:
           npm init -y
           npm install @capacitor/core @capacitor/cli @capacitor/android
 
-      - name: Create Capacitor project
+      - name: Create Android project
         run: |
           npx cap init "Earnly" "com.earnly.app" --web-dir www
           npx cap add android
           npx cap copy
           npx cap sync android
 
-      - name: Build APK
+      - name: Build release APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleRelease
 
-      - name: Upload APK
+      - name: Create signing key
+        run: |
+          keytool -genkeypair \
+            -v \
+            -keystore earnly-release.keystore \
+            -alias earnly \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass earnly123 \
+            -keypass earnly123 \
+            -dname "CN=Earnly, OU=Earnly, O=Earnly, L=Karachi, ST=Sindh, C=PK"
+
+      - name: Sign APK
+        run: |
+          BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/zipalign" \
+            -f 4 \
+            android/app/build/outputs/apk/release/app-release-unsigned.apk \
+            earnly-release-aligned.apk
+
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" sign \
+            --ks earnly-release.keystore \
+            --ks-key-alias earnly \
+            --ks-pass pass:earnly123 \
+            --key-pass pass:earnly123 \
+            --out Earnly-Release.apk \
+            earnly-release-aligned.apk
+
+      - name: Verify APK
+        run: |
+          BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify Earnly-Release.apk
+
+      - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: Earnly-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: Earnly-Release-APK
+          path: Earnly-Release.apk
