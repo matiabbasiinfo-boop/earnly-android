@@ -8,81 +8,166 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Get project
+
+      # 1. Download repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Install Node.js
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
+      # 3. Install Java
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: "21"
 
-      - name: Prepare Earnly
+      # 4. Prepare Earnly website
+      - name: Prepare Earnly files
         run: |
           mkdir -p www
+          mkdir -p resources
+
           HTML_FILE=$(find . -maxdepth 1 -type f -name "*.html" | head -n 1)
+
+          if [ -z "$HTML_FILE" ]; then
+            echo "ERROR: No HTML file found."
+            exit 1
+          fi
+
           cp "$HTML_FILE" www/index.html
 
+          if [ ! -f "icon.png" ]; then
+            echo "ERROR: icon.png was not found."
+            exit 1
+          fi
+
+          cp icon.png resources/icon.png
+
+      # 5. Install Capacitor
       - name: Install Capacitor
         run: |
           npm init -y
-          npm install @capacitor/core @capacitor/cli @capacitor/android
 
-      - name: Create Android project
+          npm install \
+            @capacitor/core \
+            @capacitor/cli \
+            @capacitor/android \
+            @capacitor/app
+
+          npm install -D @capacitor/assets
+
+      # 6. Create Capacitor Android project
+      - name: Create Capacitor project
         run: |
           npx cap init "Earnly" "com.earnly.app" --web-dir www
           npx cap add android
+
+      # 7. Generate Android app icon
+      - name: Generate Earnly icon
+        run: |
+          npx capacitor-assets generate --android
+
+      # 8. Add Android back-button behavior
+      - name: Add back button handler
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path("www/index.html")
+          html = p.read_text(encoding="utf-8")
+
+          code = r'''
+          <script>
+          document.addEventListener("DOMContentLoaded", function () {
+
+            if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+
+              const App = window.Capacitor.Plugins.App;
+
+              App.addListener("backButton", async function () {
+
+                const pages = document.querySelectorAll(".page");
+                const home = document.getElementById("home");
+
+                if (!home) {
+                  await App.exitApp();
+                  return;
+                }
+
+                const currentPage = Array.from(pages).find(
+                  page => page.classList.contains("active")
+                );
+
+                if (currentPage && currentPage.id !== "home") {
+
+                  if (typeof window.go === "function") {
+                    window.go("home");
+                  } else {
+                    pages.forEach(page => page.classList.remove("active"));
+                    home.classList.add("active");
+
+                    document.querySelectorAll(".nav").forEach(nav => {
+                      nav.classList.toggle(
+                        "active",
+                        nav.dataset.page === "home"
+                      );
+                    });
+
+                    window.scrollTo({
+                      top: 0,
+                      behavior: "smooth"
+                    });
+                  }
+
+                  return;
+                }
+
+                await App.exitApp();
+              });
+
+            }
+
+          });
+          </script>
+          '''
+
+          if "Earnly Android Back Button Handler" not in html:
+              code = code.replace(
+                  "<script>",
+                  "<script>/* Earnly Android Back Button Handler */",
+                  1
+              )
+
+              html = html.replace(
+                  "</body>",
+                  code + "\n</body>"
+              )
+
+              p.write_text(html, encoding="utf-8")
+
+          PY
+
+      # 9. Copy website into Android
+      - name: Sync Capacitor
+        run: |
           npx cap copy
           npx cap sync android
 
-      - name: Build release APK
+      # 10. Build release APK
+      - name: Build Release APK
         run: |
           cd android
           chmod +x gradlew
           ./gradlew assembleRelease
 
-      - name: Create signing key
-        run: |
-          keytool -genkeypair \
-            -v \
-            -keystore earnly-release.keystore \
-            -alias earnly \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass earnly123 \
-            -keypass earnly123 \
-            -dname "CN=Earnly, OU=Earnly, O=Earnly, L=Karachi, ST=Sindh, C=PK"
-
-      - name: Sign APK
-        run: |
-          BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
-
-          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/zipalign" \
-            -f 4 \
-            android/app/build/outputs/apk/release/app-release-unsigned.apk \
-            earnly-release-aligned.apk
-
-          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" sign \
-            --ks earnly-release.keystore \
-            --ks-key-alias earnly \
-            --ks-pass pass:earnly123 \
-            --key-pass pass:earnly123 \
-            --out Earnly-Release.apk \
-            earnly-release-aligned.apk
-
-      - name: Verify APK
-        run: |
-          BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
-          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify Earnly-Release.apk
-
-      - name: Upload Release APK
+      # 11. Upload APK
+      - name: Upload Earnly Release APK
         uses: actions/upload-artifact@v4
         with:
           name: Earnly-Release-APK
-          path: Earnly-Release.apk
+          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
