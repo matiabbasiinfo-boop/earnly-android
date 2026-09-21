@@ -1,0 +1,53 @@
+name: Build Earnly APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get project
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Prepare Earnly
+        run: |
+          mkdir -p www
+          HTML_FILE=$(find . -maxdepth 1 -type f -name "*.html" | head -n 1)
+          cp "$HTML_FILE" www/index.html
+
+      - name: Install Capacitor
+        run: |
+          npm init -y
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+
+      - name: Create Capacitor project
+        run: |
+          npx cap init "Earnly" "com.earnly.app" --web-dir www
+          npx cap add android
+          npx cap copy
+          npx cap sync android
+
+      - name: Build APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Earnly-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
